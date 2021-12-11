@@ -1,6 +1,8 @@
 package ru.smak
 
-fun main(args: Array<String>) {
-    println("Hello, World")
+import ru.smak.net.Server
+
+fun main() {
+    Server().start()
 }
 
