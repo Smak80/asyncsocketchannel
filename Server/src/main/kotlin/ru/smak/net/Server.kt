@@ -1,88 +1,77 @@
 package ru.smak.net
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import java.net.InetSocketAddress
-import java.nio.ByteBuffer
 import java.nio.channels.AsynchronousServerSocketChannel
 import java.nio.channels.AsynchronousSocketChannel
 import java.nio.channels.CompletionHandler
-import java.nio.charset.Charset
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
+import java.security.InvalidParameterException
 
-class Server {
-    var port = 1412
+class Server(
+    port: Int = 1412
+) {
+    private enum class Status {
+        DISCONNECTED, READY
+    }
+    var port = port
+        set(value) {
+            if (value !in 1025..49151) throw InvalidParameterException()
+            field = value
+        }
+
     private val ssc = AsynchronousServerSocketChannel.open()
-    private val isa = InetSocketAddress(port)
+    private val isa = InetSocketAddress(this.port)
     private val connHandler = ConnectionHandler()
-    private val readHandler = ReadingHandler()
-    private var clients: Int = 0
-    private lateinit var buf: ByteBuffer
-    private val charset = Charset.forName("utf-8")
-    private val lock = ReentrantLock()
-    private val channelCondition = lock.newCondition()
+    private val locker = Channel<Status>(1)
+    private val clientsList = mutableListOf<ConnectedClient>()
 
-    inner class ConnectionHandler : CompletionHandler<AsynchronousSocketChannel, Int>{
-        override fun completed(result: AsynchronousSocketChannel?, attachment: Int?) {
-            result?.let {
-                signal()
-                startCommunication(it, attachment)
+    inner class ConnectionHandler : CompletionHandler<AsynchronousSocketChannel, Any?>{
+        override fun completed(result: AsynchronousSocketChannel?, attachment: Any?) {
+            result?.run {
+                CoroutineScope(Dispatchers.Default).launch {
+                    locker.send(Status.READY)
+                }
+                ConnectedClient(this, clientsList).start()
             }
         }
-        override fun failed(exc: Throwable?, attachment: Int?) {
-            println("Соединение не удалось :(")
-            signal()
-        }
-    }
-
-    inner class ReadingHandler : CompletionHandler<Int, Int?>{
-        override fun completed(result: Int?, attachment: Int?) {
-            result?.let {
-                readData(it)
+        override fun failed(exc: Throwable?, attachment: Any?) {
+            CoroutineScope(Dispatchers.Default).launch {
+                locker.send(Status.READY)
             }
         }
-        override fun failed(exc: Throwable?, attachment: Int?) {
-            println("Чтение данных не удалось :(")
-        }
     }
 
-    fun signal(){
-        lock.withLock {
-            channelCondition.signal()
-        }
-    }
-
-    fun start() {
-        runBlocking {
+    fun asyncStart() {
+        CoroutineScope(Dispatchers.Default).launch {
             if (ssc.isOpen) {
                 withContext(Dispatchers.IO) {
                     ssc.bind(isa)
+                    locker.send(Status.READY)
                 }
-                val job = CoroutineScope(Dispatchers.IO).launch {
-                    while (true) {
-                        println("Ожидаем подключения")
-                        lock.withLock {
-                            ssc.accept(++clients, connHandler)
-                            channelCondition.await()
+                CoroutineScope(Dispatchers.IO).launch {
+                    while(true) {
+                        when(locker.receive()) {
+                            Status.READY -> {
+                                println("Ожидание подключения")
+                                ssc.accept(null, connHandler)
+                            }
+                            Status.DISCONNECTED -> {
+                                locker.close()
+                                break
+                            }
                         }
                     }
                 }
-                job.join()
             }
         }
     }
 
-    private fun startCommunication(channel: AsynchronousSocketChannel, attachment: Int?) {
-        if (channel.isOpen){
-            buf = ByteBuffer.allocate(1024)
-            buf.clear()
-            channel.read(buf, attachment, readHandler)
+    fun stop(){
+        clientsList.forEach { it.stop() }
+        CoroutineScope(Dispatchers.Default).launch{
+            locker.receive()
+            locker.send(Status.DISCONNECTED)
         }
-    }
-
-    private fun readData(size: Int) {
-        println("Прочитано $size байт")
-        buf.flip()
-        println(charset.decode(buf))
     }
 }

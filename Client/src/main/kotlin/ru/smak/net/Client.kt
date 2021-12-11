@@ -4,16 +4,24 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.channels.AsynchronousSocketChannel
 import java.nio.channels.CompletionHandler
 import java.nio.charset.Charset
+import java.security.InvalidParameterException
 
 class Client(
     var address: InetAddress,
-    var port: Int = 1412
+    port: Int = 1412
 ) {
+
+    var port = port
+        set(value) {
+            if (value !in 1025..49151) throw InvalidParameterException()
+            field = value
+        }
 
     companion object {
         enum class Status{
@@ -24,24 +32,23 @@ class Client(
 
     inner class ConnectionHandler : CompletionHandler<Void, Any?> {
         override fun completed(result: Void?, attachment: Any?) {
-            println("Успешное подключение к серверу")
             status = Status.CONNECTED
         }
 
         override fun failed(exc: Throwable?, attachment: Any?) {
-            println("Не удалось подключиться к серверу")
+            throw ConnectException("Не удалось подключиться к серверу")
         }
     }
 
     inner class WriteHandler : CompletionHandler<Int, Any?> {
         override fun completed(result: Int?, attachment: Any?) {
             result?.let {
-                println("Успешная передача информации на сервер")
+                println("Успешная передача $it байт информации на сервер")
             }
         }
 
         override fun failed(exc: Throwable?, attachment: Any?) {
-            println("Не удалось передать данные на сервер")
+            throw IOException("Не удалось передать данные на сервер")
         }
     }
 
@@ -51,18 +58,18 @@ class Client(
     private val connHandler = ConnectionHandler()
     private val writeHandler = WriteHandler()
     private val charset = Charset.forName("utf-8")
-//    private val lock = ReentrantLock()
-//    private val channelCondition = lock.newCondition()
     var status: Status = Status.NOT_CONNECTED
 
     fun sendMessage(s: String) {
-        if (ch.isOpen){
-            val buf = charset.encode(s)
-            ch.write(buf, null, writeHandler)
-        } else throw IOException("Сообщение нельзя отправить без подключения")
+        CoroutineScope(Dispatchers.IO).launch {
+            if (ch.isOpen) {
+                val buf = charset.encode(s)
+                ch.write(buf, null, writeHandler)
+            } else throw IOException("Сообщение нельзя отправить без подключения")
+        }
     }
 
-    fun start() {
+    fun asyncStart() {
         CoroutineScope(Dispatchers.IO).launch {
             ch.connect(sa, null, connHandler)
         }

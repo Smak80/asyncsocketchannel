@@ -14,22 +14,22 @@ val client = Client(InetAddress.getLocalHost())
 fun main() {
     val uReader = ConsoleUIReader()
     val flow = uReader.dataFlow
-    client.start()
+    try {
+        client.asyncStart()
+    } catch (ex: Exception){
+        println(ex)
+    }
     runBlocking {
-        val job = CoroutineScope(Dispatchers.IO).launch {
-            flow.collect { value ->
-                if (!value.equals("STOP"))
-                    try {
-                        client.sendMessage(value)
-                    } catch (ex: Exception){
-                        println("Ошибка отправки сообщения :(")
-                        println(ex)
-                    }
-                else
-                    client.stop()
-                    return@collect
-            }
+        flow.collect { value ->
+            if (!value.equals("STOP"))
+                try {
+                    client.sendMessage(value)
+                } catch (ex: Exception){
+                    println(ex)
+                }
+            else
+                client.stop()
+                return@collect
         }
-        job.join()
     }
 }
