@@ -8,6 +8,7 @@
         <outputRelativeToContentRoot value="true" />
         <module name="Server" />
         <module name="Client" />
+        <module name="Communication" />
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>

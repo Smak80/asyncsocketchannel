@@ -33,6 +33,12 @@
             <artifactId>kotlinx-coroutines-swing</artifactId>
             <version>1.5.2</version>
         </dependency>
+        <dependency>
+            <groupId>ru.smak</groupId>
+            <artifactId>Communication</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <scope>compile</scope>
+        </dependency>
     </dependencies>
 
     <build>

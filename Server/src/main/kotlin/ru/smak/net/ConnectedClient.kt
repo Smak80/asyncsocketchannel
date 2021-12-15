@@ -1,50 +1,25 @@
 package ru.smak.net
 
-import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
-import java.nio.ByteBuffer
 import java.nio.channels.AsynchronousSocketChannel
-import java.nio.channels.CompletionHandler
-import java.nio.charset.Charset
 
 class ConnectedClient(
-    val channel: AsynchronousSocketChannel,
+    val ioChannel: AsynchronousSocketChannel,
     val clients: MutableList<ConnectedClient>,
 ) {
 
-    enum class StreamType{
-        READ, WRITE
-    }
-
-    inner class IOHandler : CompletionHandler<Int, StreamType> {
-        override fun completed(result: Int?, attachment: StreamType) {
-            when (attachment){
-                StreamType.READ -> {
-                    println("Прием данных")
-                    result?.let {
-                        if (it > 0) {
-                            readData(it)
-                            setStatus(Status.READY)
-                        } else {
-                            setStatus(Status.FINISHED)
-                        }
-                    }
-                }
-                StreamType.WRITE ->{
-                    println("Данные успешно отправлены")
-                    CoroutineScope(Dispatchers.IO).launch {
-                        writeLockerChannel.send(true)
-                    }
+    private val communicator: Communicator by lazy {
+        Communicator(ioChannel).also{
+            it.addReceiveListener { s, e ->
+                if (e==null)
+                    s?.let{ sendToAll(it) }
+                else
+                    stop()
+            }
+            it.addSendListener { sz, e ->
+                if (e != null){
+                    stop()
                 }
             }
-        }
-        override fun failed(exc: Throwable?, attachment: StreamType) {
-            println("Чтение/запись данных не удалась :(")
-            if (attachment == StreamType.WRITE)
-                CoroutineScope(Dispatchers.IO).launch {
-                    writeLockerChannel.send(false)
-                }
-            stop()
         }
     }
 
@@ -52,81 +27,19 @@ class ConnectedClient(
         clients.add(this)
     }
 
-    private fun setStatus(s: Status){
-        CoroutineScope(Dispatchers.IO).launch {
-            readLockerChannel.send(s)
-        }
-    }
-
-    private enum class Status{
-        READY, FINISHED
-    }
-
-    private var buf: ByteBuffer = ByteBuffer.allocate(1024)
-    private val charset = Charset.forName("utf-8")
-    private val ioHandler = IOHandler()
-    private var stop = false
-    private val readLockerChannel = Channel<Status>(1)
-    private val writeLockerChannel = Channel<Boolean>(1)
-
     fun start(){
-        println("Подключенный клиент стартует")
-        readMessages()
+        communicator.asyncStart()
     }
 
     fun stop(){
-        stop = true
-        setStatus(Status.FINISHED)
+        communicator.stop()
         clients.remove(this)
     }
 
-    private fun readMessages() {
-        println("Запуск чтения сообщений")
-        CoroutineScope(Dispatchers.IO).launch {
-            setStatus(Status.READY)
-            while (channel.isOpen) {
-                when (readLockerChannel.receive()) {
-                    Status.READY -> {
-                        buf.clear()
-                        channel.read(buf, StreamType.READ, ioHandler)
-                        println("Попытка прочитать данные")
-                    }
-                    Status.FINISHED -> {
-                        break
-                    }
-                }
-            }
-            println("Клиент отключился")
-            readLockerChannel.close()
-            writeLockerChannel.close()
-        }
-    }
-
-    private fun sendMessage(msg: String) {
-        CoroutineScope(Dispatchers.IO).launch {
-            val buf = charset.encode(msg)
-            val sz = buf.limit()
-            val bufSz = charset.encode(sz.toString())
-            channel.write(bufSz, StreamType.WRITE, ioHandler)
-            writeLockerChannel.receive()
-            channel.write(buf, StreamType.WRITE, ioHandler)
-            writeLockerChannel.receive()
-        }
-    }
-
-    private fun readData(size: Int) {
-        println("Прочитано $size байт")
-        buf.flip()
-        charset.decode(buf).toString().let{
-            println(it)
-            if (it == "STOP")
-                stop()
-            sendToAll(it)
-        }
-    }
+    private fun sendMessage(msg: String) = communicator.sendMessage(msg)
 
     private fun sendToAll(message: String) {
-        clients.forEach { client ->
+        clients.filterNot { it == this }.forEach { client ->
             client.sendMessage(message)
         }
     }

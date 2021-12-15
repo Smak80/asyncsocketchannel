@@ -11,9 +11,6 @@ import java.security.InvalidParameterException
 class Server(
     port: Int = 1412
 ) {
-    private enum class Status {
-        DISCONNECTED, READY
-    }
     var port = port
         set(value) {
             if (value !in 1025..49151) throw InvalidParameterException()
@@ -23,21 +20,23 @@ class Server(
     private val ssc = AsynchronousServerSocketChannel.open()
     private val isa = InetSocketAddress(this.port)
     private val connHandler = ConnectionHandler()
-    private val locker = Channel<Status>(1)
+    private val locker = Channel<Int>(1)
     private val clientsList = mutableListOf<ConnectedClient>()
 
     inner class ConnectionHandler : CompletionHandler<AsynchronousSocketChannel, Any?>{
         override fun completed(result: AsynchronousSocketChannel?, attachment: Any?) {
             result?.run {
                 CoroutineScope(Dispatchers.Default).launch {
-                    locker.send(Status.READY)
+                    locker.send(1)
                 }
                 ConnectedClient(this, clientsList).start()
+                val x = clientsList.size
+                println("Подключено $x клиентов")
             }
         }
         override fun failed(exc: Throwable?, attachment: Any?) {
             CoroutineScope(Dispatchers.Default).launch {
-                locker.send(Status.READY)
+                locker.send(1)
             }
         }
     }
@@ -46,32 +45,28 @@ class Server(
         CoroutineScope(Dispatchers.Default).launch {
             if (ssc.isOpen) {
                 withContext(Dispatchers.IO) {
-                    ssc.bind(isa)
-                    locker.send(Status.READY)
+                    try {
+                        ssc.bind(isa)
+                    } catch (_: Throwable){
+                        println("Невозможно занять указанный порт.")
+                    }
                 }
                 CoroutineScope(Dispatchers.IO).launch {
-                    while(true) {
-                        when(locker.receive()) {
-                            Status.READY -> {
-                                println("Ожидание подключения")
-                                ssc.accept(null, connHandler)
-                            }
-                            Status.DISCONNECTED -> {
-                                locker.close()
-                                break
-                            }
+                    try {
+                        while (ssc.isOpen) {
+                            println("Ожидание подключения")
+                            ssc.accept(null, connHandler)
+                            locker.receive()
                         }
-                    }
+                    }catch (_: Throwable){}
                 }
             }
         }
     }
 
     fun stop(){
-        clientsList.forEach { it.stop() }
-        CoroutineScope(Dispatchers.Default).launch{
-            locker.receive()
-            locker.send(Status.DISCONNECTED)
-        }
+        clientsList.toList().forEach { it.stop() }
+        ssc.close()
+        locker.close()
     }
 }
