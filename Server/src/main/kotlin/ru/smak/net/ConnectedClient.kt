@@ -12,27 +12,49 @@ class ConnectedClient(
     val clients: MutableList<ConnectedClient>,
 ) {
 
-    inner class ReadingHandler : CompletionHandler<Int, Any?> {
-        override fun completed(result: Int?, attachment: Any?) {
-            println("Прием данных")
-            result?.let {
-                if (it > 0) {
-                    readData(it)
-                    setStatus(Status.READY)
-                } else {
-                    setStatus(Status.FINISHED)
+    enum class StreamType{
+        READ, WRITE
+    }
+
+    inner class IOHandler : CompletionHandler<Int, StreamType> {
+        override fun completed(result: Int?, attachment: StreamType) {
+            when (attachment){
+                StreamType.READ -> {
+                    println("Прием данных")
+                    result?.let {
+                        if (it > 0) {
+                            readData(it)
+                            setStatus(Status.READY)
+                        } else {
+                            setStatus(Status.FINISHED)
+                        }
+                    }
+                }
+                StreamType.WRITE ->{
+                    println("Данные успешно отправлены")
+                    CoroutineScope(Dispatchers.IO).launch {
+                        writeLockerChannel.send(true)
+                    }
                 }
             }
         }
-        override fun failed(exc: Throwable?, attachment: Any?) {
-            println("Чтение данных не удалось :(")
-            setStatus(Status.FINISHED)
+        override fun failed(exc: Throwable?, attachment: StreamType) {
+            println("Чтение/запись данных не удалась :(")
+            if (attachment == StreamType.WRITE)
+                CoroutineScope(Dispatchers.IO).launch {
+                    writeLockerChannel.send(false)
+                }
+            stop()
         }
+    }
+
+    init {
+        clients.add(this)
     }
 
     private fun setStatus(s: Status){
         CoroutineScope(Dispatchers.IO).launch {
-            locker.send(s)
+            readLockerChannel.send(s)
         }
     }
 
@@ -42,9 +64,10 @@ class ConnectedClient(
 
     private var buf: ByteBuffer = ByteBuffer.allocate(1024)
     private val charset = Charset.forName("utf-8")
-    private val readHandler = ReadingHandler()
+    private val ioHandler = IOHandler()
     private var stop = false
-    private val locker = Channel<Status>(1)
+    private val readLockerChannel = Channel<Status>(1)
+    private val writeLockerChannel = Channel<Boolean>(1)
 
     fun start(){
         println("Подключенный клиент стартует")
@@ -53,6 +76,7 @@ class ConnectedClient(
 
     fun stop(){
         stop = true
+        setStatus(Status.FINISHED)
         clients.remove(this)
     }
 
@@ -60,28 +84,50 @@ class ConnectedClient(
         println("Запуск чтения сообщений")
         CoroutineScope(Dispatchers.IO).launch {
             setStatus(Status.READY)
-            while (true) {
-                if (channel.isOpen) {
-                    when (locker.receive()) {
-                        Status.READY -> {
-                            buf.clear()
-                            channel.read(buf, null, readHandler)
-                            println("Попытка прочитать данные")
-                        }
-                        Status.FINISHED -> {
-                            locker.close()
-                            println("Клиент отключился")
-                            break
-                        }
+            while (channel.isOpen) {
+                when (readLockerChannel.receive()) {
+                    Status.READY -> {
+                        buf.clear()
+                        channel.read(buf, StreamType.READ, ioHandler)
+                        println("Попытка прочитать данные")
+                    }
+                    Status.FINISHED -> {
+                        break
                     }
                 }
             }
+            println("Клиент отключился")
+            readLockerChannel.close()
+            writeLockerChannel.close()
+        }
+    }
+
+    private fun sendMessage(msg: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val buf = charset.encode(msg)
+            val sz = buf.limit()
+            val bufSz = charset.encode(sz.toString())
+            channel.write(bufSz, StreamType.WRITE, ioHandler)
+            writeLockerChannel.receive()
+            channel.write(buf, StreamType.WRITE, ioHandler)
+            writeLockerChannel.receive()
         }
     }
 
     private fun readData(size: Int) {
         println("Прочитано $size байт")
         buf.flip()
-        println(charset.decode(buf))
+        charset.decode(buf).toString().let{
+            println(it)
+            if (it == "STOP")
+                stop()
+            sendToAll(it)
+        }
+    }
+
+    private fun sendToAll(message: String) {
+        clients.forEach { client ->
+            client.sendMessage(message)
+        }
     }
 }

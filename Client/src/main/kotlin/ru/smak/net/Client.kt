@@ -28,16 +28,23 @@ class Client(
     private val failMessageListener: MutableList<(String)->Unit> = mutableListOf()
 
     companion object {
+
         enum class Status{
             NOT_CONNECTED,
             CONNECTED,
         }
+
+        enum class StreamType{
+            READ, WRITE
+        }
+        const val defaultBufferSize = 12
     }
 
     inner class ConnectionHandler : CompletionHandler<Void, Any?> {
         override fun completed(result: Void?, attachment: Any?) {
             status = Status.CONNECTED
             successMessageListener.forEach { it("Подключение к серверу прошло успешно")}
+            readMessages()
         }
 
         override fun failed(exc: Throwable?, attachment: Any?) {
@@ -45,17 +52,31 @@ class Client(
         }
     }
 
-    enum class StreamType{
-        READ, WRITE
-    }
-
-    inner class WriteHandler : CompletionHandler<Int, StreamType> {
+    inner class IOHandler : CompletionHandler<Int, StreamType> {
         override fun completed(result: Int?, attachment: StreamType) {
-            result?.let {
-                if (attachment==StreamType.WRITE)
-                    successMessageListener.forEach { it("Успешная передача $it байт информации на сервер")}
-                else CoroutineScope(Dispatchers.IO).launch {
-                    channel.send(receivedMessage)
+            result?.let { msgLen ->
+                if (attachment == StreamType.WRITE){
+                    successMessageListener.forEach { it("Успешная передача $msgLen байт информации на сервер") }
+                }
+                else {
+                    CoroutineScope(Dispatchers.IO).launch {
+                        if (msgLen > 0){
+                            buffer.flip()
+                            if (!gotSize){
+                                try {
+                                    val v = charset.decode(buffer).toString()
+                                    bufSize = v.toInt()
+                                    gotSize = true
+                                } catch (_: Throwable){
+                                    // Неверные данные в потоке
+                                }
+                                lockerChannel.send("")
+                            } else {
+                                lockerChannel.send(charset.decode(buffer).toString())
+                                gotSize = false
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -63,7 +84,6 @@ class Client(
         override fun failed(exc: Throwable?, attachment: StreamType) {
             if (attachment == StreamType.WRITE)
                 failMessageListener.forEach { it("Не удалось передать данные на сервер")}
-
         }
     }
 
@@ -71,43 +91,45 @@ class Client(
     private val sa: InetSocketAddress
         get() = InetSocketAddress(address, port)
     private val connHandler = ConnectionHandler()
-    private val ioHandler = WriteHandler()
+    private val ioHandler = IOHandler()
     private val charset = Charset.forName("utf-8")
     var status: Status = Status.NOT_CONNECTED
-    private val channel = Channel<String>(1)
-    private val buffer: ByteBuffer = ByteBuffer.allocate(10)
+    private val lockerChannel = Channel<String>(1)
+    private var buffer: ByteBuffer = ByteBuffer.allocate(defaultBufferSize)
+    private var gotSize = false
+    private var bufSize: Int = defaultBufferSize
         get() {
-            field.rewind()
-            return field
-        }
-    private val receivedMessage: String
-        get() {
-            return charset.decode(buffer).toString()
+            if (gotSize)
+                return field
+            else
+                return defaultBufferSize
         }
 
-    fun sendMessage(s: String) {
-        CoroutineScope(Dispatchers.IO).launch {
-            val buf = charset.encode(s)
-            if (ch.isOpen)
-                ch.write(buf, StreamType.WRITE, ioHandler)
-            else
-                failMessageListener.forEach{ it("Соединение закрыто") }
-        }
+    fun sendMessage(s: String) = CoroutineScope(Dispatchers.IO).launch {
+        val buf = charset.encode(s)
+        if (ch.isOpen)
+            ch.write(buf, StreamType.WRITE, ioHandler)
+        else
+            failMessageListener.forEach{ it("Соединение закрыто") }
     }
 
     fun readMessages() = CoroutineScope(Dispatchers.IO).launch {
         while (ch.isOpen) {
-            ch.read(buffer, StreamType.READ, ioHandler)
-            channel.receive().also { msg ->
-                successMessageListener.forEach { it(msg) }
+            //buffer?.clear()
+            buffer = ByteBuffer.allocate(bufSize)
+            try {
+                ch.read(buffer, StreamType.READ, ioHandler)
+            } catch (_: Throwable){ }
+            lockerChannel.receive().also { msg ->
+                if (msg.isNotEmpty()) {
+                    successMessageListener.forEach { it(msg) }
+                }
             }
         }
     }
 
     fun asyncStart() {
-        CoroutineScope(Dispatchers.IO).launch {
-            ch.connect(sa, null, connHandler)
-        }
+        ch.connect(sa, null, connHandler)
     }
 
     fun stop (){
