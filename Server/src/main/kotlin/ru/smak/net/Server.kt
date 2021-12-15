@@ -17,6 +17,9 @@ class Server(
             field = value
         }
 
+    private val successMessageListener: MutableList<(String)->Unit> = mutableListOf()
+    private val failMessageListener: MutableList<(String)->Unit> = mutableListOf()
+
     private val ssc = AsynchronousServerSocketChannel.open()
     private val isa = InetSocketAddress(this.port)
     private val connHandler = ConnectionHandler()
@@ -68,5 +71,21 @@ class Server(
         clientsList.toList().forEach { it.stop() }
         ssc.close()
         locker.close()
+    }
+
+    fun addSuccessListener(listener: (String)->Unit){
+        successMessageListener.add(listener)
+    }
+
+    fun removeSuccessListener(listener: (String)->Unit){
+        successMessageListener.remove(listener)
+    }
+
+    fun addFailListener(listener: (String)->Unit){
+        failMessageListener.add(listener)
+    }
+
+    fun removeFailListener(listener: (String)->Unit){
+        failMessageListener.remove(listener)
     }
 }

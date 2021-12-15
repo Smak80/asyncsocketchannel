@@ -1,37 +1,38 @@
 package ru.smak
 
 import ru.smak.net.Client
+import ru.smak.ui.console.ConsoleUI
 import java.lang.Exception
 import java.net.InetAddress
 
 val client = Client(InetAddress.getLocalHost())
-val uReader = ConsoleUI()
+val ui = ConsoleUI()
 
 fun main() {
     try {
-        client.runCatching {
+        client.run {
             addFailListener {
-                uReader.run{
+                ui.run{
                     showMessage(it)
                     stop()
                 }
             }
             addSuccessListener {
-                uReader.showMessage(it)
+                ui.showMessage(it)
             }
             asyncStart()
         }
-        uReader.run {
+        ui.run {
             this += ::newData
             start()
         }
     } catch (ex: Exception){
-        println(ex)
+        ui.showMessage(ex.message.toString())
     }
 }
 
 private fun newData(message: String) {
-    if (!message.equals("STOP")) {
+    if (message != "STOP") {
         try {
             client.sendMessage(message)
         } catch (ex: Exception) {
@@ -40,6 +41,6 @@ private fun newData(message: String) {
     }
     else {
         client.stop()
-        uReader.stop()
+        ui.stop()
     }
 }

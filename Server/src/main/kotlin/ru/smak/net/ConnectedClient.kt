@@ -3,19 +3,19 @@ package ru.smak.net
 import java.nio.channels.AsynchronousSocketChannel
 
 class ConnectedClient(
-    val ioChannel: AsynchronousSocketChannel,
-    val clients: MutableList<ConnectedClient>,
+    private val ioChannel: AsynchronousSocketChannel,
+    private val clients: MutableList<ConnectedClient>,
 ) {
 
     private val communicator: Communicator by lazy {
-        Communicator(ioChannel).also{
-            it.addReceiveListener { s, e ->
+        Communicator(ioChannel).also{ comm ->
+            comm.addReceiveListener { s, e ->
                 if (e==null)
                     s?.let{ sendToAll(it) }
                 else
                     stop()
             }
-            it.addSendListener { sz, e ->
+            comm.addSendListener { _, e ->
                 if (e != null){
                     stop()
                 }

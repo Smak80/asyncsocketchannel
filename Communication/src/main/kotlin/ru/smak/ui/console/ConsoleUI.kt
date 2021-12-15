@@ -1,24 +1,23 @@
-package ru.smak
+package ru.smak.ui.console
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.cancellable
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import java.util.concurrent.CancellationException
+import kotlin.system.exitProcess
 
 class ConsoleUI {
 
     private val inputListener: MutableList<(String)->Unit> = mutableListOf()
     private var mainJob: Job? = null
 
-    val dataFlow: Flow<String>
+    private val dataFlow: Flow<String>
         get() = flow {
             var str = ""
-            while (!str.equals("STOP")) {
-                showMessage("Ожидание сообщения для передачи на сервер...")
+            while (str != "STOP") {
+                showMessage("Ожидание ввода данных...")
                 str = readLine() ?: "STOP"
                 emit(str)
             }
@@ -47,8 +46,8 @@ class ConsoleUI {
 
     fun stop() {
         mainJob?.cancel()
-        showMessage("Работа клиента завершена")
-        System.exit(0)
+        showMessage("Завершение работы.")
+        exitProcess(0)
     }
 
     fun showMessage(msg: String){
